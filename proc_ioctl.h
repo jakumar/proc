@@ -8,7 +8,7 @@ typedef struct kv_data_ {
 
 typedef struct radix_leaf_data_ {
     unsigned int    num_kv;
-    kv_data_t       **data;
+    kv_data_t       *kv;
 } radix_leaf_data_t;
 
 #endif // IOCTL_HANDLER
