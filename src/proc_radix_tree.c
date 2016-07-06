@@ -1,7 +1,18 @@
+#ifndef USER_MODULE
+
+#include <linux/module.h>	
+#include <linux/kernel.h>	
+#include <linux/proc_fs.h>	
+#include <asm/uaccess.h>
+
+#else
+
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+
+#endif
 
 #include "proc_common.h"
 #include "proc_radix_tree.h"
@@ -10,24 +21,44 @@ static inline int keylen(char *key)
 {
     int len = strlen(key);
 
-    if (len < 0 || len >= RADIXTREE_KEYSIZE)
+    if (len < 0 || len >= MAX_KEYSIZE)
+#ifndef USER_MODULE
+        printk("Warning: rxt key (%d) exceeds limit (%d)\n",
+                len, MAX_KEYSIZE);
+#else
         printf("Warning: rxt key (%d) exceeds limit (%d)\n",
-                len, RADIXTREE_KEYSIZE);
+                len, MAX_KEYSIZE);
+#endif
     return ((BITS_IN_BYTE * (len + 1)) - 1);
 }
 
-#define RADIX_NEW_LEAF(pnode, leaf, key, data)          \
-{                                                       \
-    leaf = malloc(sizeof(radix_node_t));                \
-    if (!leaf) return EFAIL;                            \
-    strncpy(leaf->keystore, key, RADIXTREE_KEYSIZE);    \
-    leaf->keystore[RADIXTREE_KEYSIZE - 1] = '\0';       \
-    leaf->key = leaf->keystore;                         \
-    leaf->pos = keylen(key);                            \
-    leaf->val = data;                                   \
-    leaf->parent = pnode;                               \
-    leaf->type = NODE_TYPE_LEAF;                        \
-    leaf->left = leaf->right = NULL;                    \
+static radix_node_t *
+proc_radix_alloc_leaf(radix_node_t *pnode, 
+                      char *key, 
+                      void *data)
+{
+    radix_node_t *leaf;
+
+#ifndef USER_MODULE
+    leaf = (radix_node_t *)kmalloc(sizeof(radix_node_t), GFP_KERNEL);   
+#else
+    leaf = malloc(sizeof(radix_node_t)); 
+#endif
+
+    if (!leaf) {
+        return NULL;
+    }
+
+    strncpy(leaf->keystore, key, MAX_KEYSIZE);
+    leaf->keystore[MAX_KEYSIZE - 1] = '\0';
+    leaf->key = leaf->keystore;
+    leaf->pos = keylen(key);
+    leaf->val = data;
+    leaf->parent = pnode;
+    leaf->type = NODE_TYPE_LEAF;
+    leaf->left = leaf->right = NULL;
+
+    return leaf;
 }
 
 static unsigned int common_bits(char *k1, char *k2, unsigned int bits)
@@ -82,8 +113,7 @@ static inline unsigned int key_bit_value_at(char *key, int i)
     return (*(key + (i >> 3)) & (1 << (i & 7)));
 }
 
-static unsigned int radix_insert_leaf(radix_node_t *leaf, radix_node_t *sibling, 
-                              radix_node_t *parent)
+static unsigned int radix_insert_leaf(radix_node_t *leaf, radix_node_t *sibling, radix_node_t *parent)
 {
     int bit, bit_idx;
     radix_node_t *node;
@@ -94,7 +124,11 @@ static unsigned int radix_insert_leaf(radix_node_t *leaf, radix_node_t *sibling,
 
     if (!parent) {
         parent = sibling;
+#ifndef USER_MODULE
+        node = kmalloc(sizeof(radix_node_t), GFP_KERNEL);
+#else
         node = malloc(sizeof(radix_node_t));
+#endif
         if (!node)
             return EFAIL;
         
@@ -112,6 +146,17 @@ static unsigned int radix_insert_leaf(radix_node_t *leaf, radix_node_t *sibling,
         if (bit) {
             parent->right = leaf;
             parent->left = node;
+#ifdef DEBUG_FLAG
+#ifndef USER_MODULE
+			printk("\nradix_insert_leaf(): Inserting Right Leaf Key[0x%x 0x%x:%s] Pos:%d Type:%d",
+				*(int *)leaf->key, *(int *)(leaf->key + 4), leaf->key, leaf->pos,
+				leaf->type);
+			printk("\nradix_insert_leaf(): Inserting Sibling@Left Leaf Key[0x%x 0x%x:%s] Pos:%d Type:%d",
+				*(int *)node->key, *(int *)(node->key + 4), node->key, node->pos, node->type);
+			printk("\nradix_insert_leaf(): Sibling as Parent Key[0x%x 0x%x:%s] Pos:%d Type:%d",
+				*(int *)parent->key, *(int *)(parent->key + 4), parent->key, parent->pos,
+				parent->type);
+#else
 			printf("\nradix_insert_leaf(): Inserting Right Leaf Key[0x%x 0x%x:%s] Pos:%d Type:%d",
 				*(int *)leaf->key, *(int *)(leaf->key + 4), leaf->key, leaf->pos,
 				leaf->type);
@@ -120,9 +165,22 @@ static unsigned int radix_insert_leaf(radix_node_t *leaf, radix_node_t *sibling,
 			printf("\nradix_insert_leaf(): Sibling as Parent Key[0x%x 0x%x:%s] Pos:%d Type:%d",
 				*(int *)parent->key, *(int *)(parent->key + 4), parent->key, parent->pos,
 				parent->type);
+#endif
+#endif
         } else {
             parent->right = node;
             parent->left = leaf;
+#ifdef DEBUG_FLAG
+#ifndef USER_MODULE
+			printk("\nradix_insert_leaf(): Inserting Left Leaf Key[0x%x 0x%x:%s] Pos:%d Type:%d",
+				*(int *)leaf->key, *(int *)(leaf->key + 4), leaf->key, leaf->pos,
+				leaf->type);
+			printk("\nradix_insert_leaf(): Inserting Sibling@Right Leaf Key[0x%x 0x%x:%s] Pos:%d Type:%d",
+				*(int *)node->key, *(int *)(node->key + 4), node->key, node->pos, node->type);
+			printk("\nradix_insert_leaf(): Sibling as Parent Key[0x%x 0x%x:%s] Pos:%d Type:%d",
+				*(int *)parent->key, *(int *)(parent->key + 4), parent->key, parent->pos,
+				parent->type);
+#else
 			printf("\nradix_insert_leaf(): Inserting Left Leaf Key[0x%x 0x%x:%s] Pos:%d Type:%d",
 				*(int *)leaf->key, *(int *)(leaf->key + 4), leaf->key, leaf->pos,
 				leaf->type);
@@ -131,12 +189,30 @@ static unsigned int radix_insert_leaf(radix_node_t *leaf, radix_node_t *sibling,
 			printf("\nradix_insert_leaf(): Sibling as Parent Key[0x%x 0x%x:%s] Pos:%d Type:%d",
 				*(int *)parent->key, *(int *)(parent->key + 4), parent->key, parent->pos,
 				parent->type);
+#endif
+#endif
         }
         return EOK;
     }
 
     if (bit_idx < parent->pos) {
         // leaf need to above the parent
+#ifdef DEBUG_FLAG
+#ifndef USER_MODULE
+		printk("\nradix_insert_leaf(): Walking UP Pos:%d Parent Pos:%d",
+			bit_idx, parent->pos);
+		printk("\nradix_insert_leaf(): Walking UP Leaf Key[0x%x 0x%x:%s] Pos:%d Type:%d",
+			*(int *)leaf->key, *(int *)(leaf->key + 4), leaf->key, leaf->pos,
+			leaf->type);
+		printk("\nradix_insert_leaf(): Walking UP Parent Key[0x%x 0x%x:%s] Pos:%d Type:%d",
+			*(int *)parent->key, *(int *)(parent->key + 4), parent->key, parent->pos,
+			parent->type);
+		if (parent->parent) {
+			printk("\nradix_insert_leaf(): Grant Parent Key[0x%x 0x%x:%s] Pos:%d Type:%d",
+				*(int *)parent->parent->key, *(int *)(parent->parent->key + 4), 
+				parent->parent->key, parent->pos, parent->parent->type);
+		}
+#else
 		printf("\nradix_insert_leaf(): Walking UP Pos:%d Parent Pos:%d",
 			bit_idx, parent->pos);
 		printf("\nradix_insert_leaf(): Walking UP Leaf Key[0x%x 0x%x:%s] Pos:%d Type:%d",
@@ -150,6 +226,8 @@ static unsigned int radix_insert_leaf(radix_node_t *leaf, radix_node_t *sibling,
 				*(int *)parent->parent->key, *(int *)(parent->parent->key + 4), 
 				parent->parent->key, parent->pos, parent->parent->type);
 		}
+#endif
+#endif
         return radix_insert_leaf(leaf, parent, parent->parent);
     } else {
         // add leaf is a as a child of the parent
@@ -157,11 +235,19 @@ static unsigned int radix_insert_leaf(radix_node_t *leaf, radix_node_t *sibling,
         if ((leaf->pos == sibling->pos) && 
             !strncmp(leaf->key, sibling->key, leaf->pos)) {
             // free leaf in the calling function
+#ifndef USER_MODULE
+			printk("\nradix_insert_leaf(): ERROR: Duplicate Key.....");
+#else
 			printf("\nradix_insert_leaf(): ERROR: Duplicate Key.....");
+#endif
             return EFAIL;
         }
 
+#ifndef USER_MODULE
+        node = kmalloc(sizeof(radix_node_t), GFP_KERNEL);
+#else
         node = malloc(sizeof(radix_node_t));
+#endif
         if (!node) 
             return EFAIL;
 
@@ -176,41 +262,89 @@ static unsigned int radix_insert_leaf(radix_node_t *leaf, radix_node_t *sibling,
         if (bit) {
             node->right = leaf;
             node->left = sibling;
+#ifdef DEBUG_FLAG
+#ifndef USER_MODULE
+			printk("\nradix_insert_leaf(): Inserting Right Leaf Key[0x%x 0x%x:%s] Pos:%d Type:%d",
+				*(int *)leaf->key, *(int *)(leaf->key + 4), leaf->key, leaf->pos,
+				leaf->type);
+			printk("\nradix_insert_leaf(): Adjusting Sibling @Left Key[0x%x 0x%x:%s] Pos:%d Type:%d",
+				*(int *)sibling->key, *(int *)(sibling->key + 4), sibling->key, sibling->pos,
+				sibling->type);
+#else
 			printf("\nradix_insert_leaf(): Inserting Right Leaf Key[0x%x 0x%x:%s] Pos:%d Type:%d",
 				*(int *)leaf->key, *(int *)(leaf->key + 4), leaf->key, leaf->pos,
 				leaf->type);
 			printf("\nradix_insert_leaf(): Adjusting Sibling @Left Key[0x%x 0x%x:%s] Pos:%d Type:%d",
 				*(int *)sibling->key, *(int *)(sibling->key + 4), sibling->key, sibling->pos,
 				sibling->type);
+#endif
+#endif
         } else {
             node->right = sibling;
             node->left = leaf;
+#ifdef DEBUG_FLAG
+#ifndef USER_MODULE
+			printk("\nradix_insert_leaf(): Inserting Left Leaf Key[0x%x 0x%x:%s] Pos:%d Type:%d",
+				*(int *)leaf->key, *(int *)(leaf->key + 4), leaf->key, leaf->pos,
+				leaf->type);
+			printk("\nradix_insert_leaf(): Adjusting Sibling @Right Key[0x%x 0x%x:%s] Pos:%d Type:%d",
+				*(int *)sibling->key, *(int *)(sibling->key + 4), sibling->key, sibling->pos,
+				sibling->type);
+#else
 			printf("\nradix_insert_leaf(): Inserting Left Leaf Key[0x%x 0x%x:%s] Pos:%d Type:%d",
 				*(int *)leaf->key, *(int *)(leaf->key + 4), leaf->key, leaf->pos,
 				leaf->type);
 			printf("\nradix_insert_leaf(): Adjusting Sibling @Right Key[0x%x 0x%x:%s] Pos:%d Type:%d",
 				*(int *)sibling->key, *(int *)(sibling->key + 4), sibling->key, sibling->pos,
 				sibling->type);
+#endif
+#endif
         }
 
         if (parent->left == sibling) {
             parent->left = node;
+#ifdef DEBUG_FLAG
+#ifndef USER_MODULE
+			printk("\nradix_insert_leaf(): Inserting Parent @Left Key[0x%x 0x%x:%s] Pos:%d Type:%d",
+				*(int *)node->key, *(int *)(node->key + 4), node->key, node->pos,
+				node->type);
+			printk("\nradix_insert_leaf(): Grant Parent Key[0x%x 0x%x:%s] Pos:%d Type:%d",
+				*(int *)parent->key, *(int *)(parent->key + 4), parent->key, parent->pos,
+				parent->type);
+#else
 			printf("\nradix_insert_leaf(): Inserting Parent @Left Key[0x%x 0x%x:%s] Pos:%d Type:%d",
 				*(int *)node->key, *(int *)(node->key + 4), node->key, node->pos,
 				node->type);
 			printf("\nradix_insert_leaf(): Grant Parent Key[0x%x 0x%x:%s] Pos:%d Type:%d",
 				*(int *)parent->key, *(int *)(parent->key + 4), parent->key, parent->pos,
 				parent->type);
+#endif
+#endif
         } else if (parent->right == sibling) {
             parent->right = node;
+#ifdef DEBUG_FLAG
+#ifndef USER_MODULE
+			printk("\nradix_insert_leaf(): Inserting Parent @Right Key[0x%x 0x%x:%s] Pos:%d Type:%d",
+				*(int *)node->key, *(int *)(node->key + 4), node->key, node->pos,
+				node->type);
+			printk("\nradix_insert_leaf(): Grant Parent Key[0x%x 0x%x:%s] Pos:%d Type:%d",
+				*(int *)parent->key, *(int *)(parent->key + 4), parent->key, parent->pos,
+				parent->type);
+#else
 			printf("\nradix_insert_leaf(): Inserting Parent @Right Key[0x%x 0x%x:%s] Pos:%d Type:%d",
 				*(int *)node->key, *(int *)(node->key + 4), node->key, node->pos,
 				node->type);
 			printf("\nradix_insert_leaf(): Grant Parent Key[0x%x 0x%x:%s] Pos:%d Type:%d",
 				*(int *)parent->key, *(int *)(parent->key + 4), parent->key, parent->pos,
 				parent->type);
+#endif
+#endif
         } else {
+#ifndef USER_MODULE
+			printk("\nradix_insert_leaf(): ERROR.....");
+#else
 			printf("\nradix_insert_leaf(): ERROR.....");
+#endif
             return EFAIL;
         }
     }
@@ -229,49 +363,93 @@ static unsigned int radix_insert_common(radix_node_t *leaf, radix_node_t *rnode)
     if (radix_min(lbits, rbits) < rnode->pos) {
         if (lbits >= rbits) {
             // insert left leaf
+#ifdef DEBUG_FLAG
+#ifndef USER_MODULE
+	    	printk("\nradix_insert_common(): Insert Left of Node Key[0x%x 0x%x:%s] Pos:%d Type:%d",
+				*(int *)rnode->key, *(int *)(rnode->key + 4), rnode->key, rnode->pos, rnode->type);
+#else
 	    	printf("\nradix_insert_common(): Insert Left of Node Key[0x%x 0x%x:%s] Pos:%d Type:%d",
 				*(int *)rnode->key, *(int *)(rnode->key + 4), rnode->key, rnode->pos, rnode->type);
+#endif
+#endif
             return radix_insert_leaf(leaf, rnode->left, rnode);
         }
 
         //insert right leaf
+#ifdef DEBUG_FLAG
+#ifndef USER_MODULE
+	   	printk("\nradix_insert_common(): Insert Right of Node Key[0x%x 0x%x:%s] Pos:%d Type:%d",
+			*(int *)rnode->key, *(int *)(rnode->key + 4), rnode->key, rnode->pos, rnode->type);
+#else
 	   	printf("\nradix_insert_common(): Insert Right of Node Key[0x%x 0x%x:%s] Pos:%d Type:%d",
 			*(int *)rnode->key, *(int *)(rnode->key + 4), rnode->key, rnode->pos, rnode->type);
+#endif
+#endif
         return radix_insert_leaf(leaf, rnode->right, rnode);
     }
 
     if (lbits >= rbits) {
         if (rnode->left->type == NODE_TYPE_LEAF) {
             // found the leaf 
+#ifdef DEBUG_FLAG
+#ifndef USER_MODULE
+	   		printk("\nradix_insert_common(): Insert Left of Node Key[0x%x 0x%x:%s] Pos:%d Type:%d",
+				*(int *)rnode->key, *(int *)(rnode->key + 4), rnode->key, rnode->pos, rnode->type);
+#else
 	   		printf("\nradix_insert_common(): Insert Left of Node Key[0x%x 0x%x:%s] Pos:%d Type:%d",
 				*(int *)rnode->key, *(int *)(rnode->key + 4), rnode->key, rnode->pos, rnode->type);
+#endif
+#endif
             return radix_insert_leaf(leaf, rnode->left, rnode);
         }
+#ifdef DEBUG_FLAG
+#ifndef USER_MODULE
+	    printk("\nWalking Left - Key[0x%x 0x%x:%s] Pos:%d Type:%d",
+			*(int *)rnode->left->key, *(int *)(rnode->left->key + 4), rnode->left->key,
+			rnode->left->pos, rnode->left->type);
+#else
 	    printf("\nWalking Left - Key[0x%x 0x%x:%s] Pos:%d Type:%d",
 			*(int *)rnode->left->key, *(int *)(rnode->left->key + 4), rnode->left->key,
 			rnode->left->pos, rnode->left->type);
+#endif
+#endif
         return radix_insert_common(leaf, rnode->left);
     } else {
         if (rnode->right->type == NODE_TYPE_LEAF) {
             // found the leaf
-	   		printf("\nradix_insert_common(): Insert Right of Node Key[0x%x 0x%x:%s] Pos:%d Type:%d",
+#ifdef DEBUG_FLAG
+#ifndef USER_MODULE
+	   		printk("\nradix_insert_common(): Insert Right of Node Key[0x%x 0x%x:%s] Pos:%d Type:%d",
 				*(int *)rnode->key, *(int *)(rnode->key + 4), rnode->key, rnode->pos, rnode->type);
+#else
+	   		printk("\nradix_insert_common(): Insert Right of Node Key[0x%x 0x%x:%s] Pos:%d Type:%d",
+				*(int *)rnode->key, *(int *)(rnode->key + 4), rnode->key, rnode->pos, rnode->type);
+#endif
+#endif
             return radix_insert_leaf(leaf, rnode->right, rnode);
         }
+#ifdef DEBUG_FLAG
+#ifndef USER_MODULE
+	    printk("\nWalking Right - Key[0x%x 0x%x:%s] Pos:%d Type:%d",
+			*(int *)rnode->right->key, *(int *)(rnode->right->key + 4), rnode->right->key,
+			rnode->right->pos, rnode->right->type);
+#else
 	    printf("\nWalking Right - Key[0x%x 0x%x:%s] Pos:%d Type:%d",
 			*(int *)rnode->right->key, *(int *)(rnode->right->key + 4), rnode->right->key,
 			rnode->right->pos, rnode->right->type);
+#endif
+#endif
         return radix_insert_common(leaf, rnode->right);
     }
 
     return EFAIL;
 }
 
-unsigned int radix_insert(char *key, void *data, radix_node_t *rnode)
+unsigned int proc_radix_insert(char *key, void *data, radix_node_t *rnode)
 {
     radix_node_t *leaf;
 
-    RADIX_NEW_LEAF(rnode, leaf, key, data);
+    leaf = proc_radix_alloc_leaf(rnode, key, data);
     if (!(rnode->left || rnode->right)) {
         radix_node_t *sibling;
         unsigned int bits;
@@ -280,9 +458,17 @@ unsigned int radix_insert(char *key, void *data, radix_node_t *rnode)
             // Empty root
             rnode->val = leaf;
             rnode->type = NODE_TYPE_ROOT;
+#ifdef DEBUG_FLAG
+#ifndef USER_MODULE
+			printk("\nradix_insert(): Initializing Root - Type:%d", rnode->type);
+			printk("\nradix_insert(): Inserting Leaf Key[0x%x 0x%x:%s] Pos:%d Type:%d",
+				*(int *)leaf->key, *(int *)(leaf->key + 4), leaf->key, leaf->pos, leaf->type);
+#else
 			printf("\nradix_insert(): Initializing Root - Type:%d", rnode->type);
 			printf("\nradix_insert(): Inserting Leaf Key[0x%x 0x%x:%s] Pos:%d Type:%d",
 				*(int *)leaf->key, *(int *)(leaf->key + 4), leaf->key, leaf->pos, leaf->type);
+#endif
+#endif
             return EOK;
         }
 
@@ -290,46 +476,93 @@ unsigned int radix_insert(char *key, void *data, radix_node_t *rnode)
         sibling = rnode->val;
         bits = common_bits_in_key(key, sibling->key,
                 radix_min(leaf->pos, sibling->pos));
+#ifdef DEBUG_FLAG
+#ifndef USER_MODULE
+		printk("\nradix_insert(): Common Bits:%d", bits);
+#else
 		printf("\nradix_insert(): Common Bits:%d", bits);
+#endif
+#endif
         if (key_bit_value_at(key, bits)) {
             // add new leaf at right
             rnode->right = leaf;
             rnode->left = sibling;
+#ifdef DEBUG_FLAG
+#ifndef USER_MODULE
+			printk("\nradix_insert(): Inserting Right Leaf Key[0x%x 0x%x:%s] Pos:%d Type:%d",
+				*(int *)leaf->key, *(int *)(leaf->key + 4), leaf->key, leaf->pos,
+				leaf->type);
+			printk("\nradix_insert(): Adjusting @Left Leaf Key[0x%x 0x%x:%s] Pos:%d Type:%d",
+				*(int *)sibling->key, *(int *)(sibling->key + 4), sibling->key,
+				 sibling->pos, sibling->type);
+#else
 			printf("\nradix_insert(): Inserting Right Leaf Key[0x%x 0x%x:%s] Pos:%d Type:%d",
 				*(int *)leaf->key, *(int *)(leaf->key + 4), leaf->key, leaf->pos,
 				leaf->type);
 			printf("\nradix_insert(): Adjusting @Left Leaf Key[0x%x 0x%x:%s] Pos:%d Type:%d",
 				*(int *)sibling->key, *(int *)(sibling->key + 4), sibling->key,
 				 sibling->pos, sibling->type);
+#endif
+#endif
         } else {
             rnode->left = leaf;
             rnode->right = sibling;
+#ifdef DEBUG_FLAG
+#ifndef USER_MODULE
+			printk("\nradix_insert(): Inserting Left Leaf Key[0x%x 0x%x:%s] Pos:%d Type:%d",
+				*(int *)leaf->key, *(int *)(leaf->key + 4), leaf->key, leaf->pos,
+				leaf->type);
+			printk("\nradix_insert(): Adjusting @Right Leaf Key[0x%x 0x%x:%s] Pos:%d Type:%d",
+				*(int *)sibling->key, *(int *)(sibling->key + 4), sibling->key,
+				 sibling->pos, sibling->type);
+#else
 			printf("\nradix_insert(): Inserting Left Leaf Key[0x%x 0x%x:%s] Pos:%d Type:%d",
 				*(int *)leaf->key, *(int *)(leaf->key + 4), leaf->key, leaf->pos,
 				leaf->type);
 			printf("\nradix_insert(): Adjusting @Right Leaf Key[0x%x 0x%x:%s] Pos:%d Type:%d",
 				*(int *)sibling->key, *(int *)(sibling->key + 4), sibling->key,
 				 sibling->pos, sibling->type);
+#endif
+#endif
         }
 
         rnode->val = NULL;
         rnode->key = key;
         rnode->pos = bits;
         rnode->type = NODE_TYPE_NODE;
-		printf("\nradix_insert(): Parent Key[0x%x 0x%x:%s] Pos:%d Type:%d",
+#ifdef DEBUG_FLAG
+#ifndef USER_MODULE
+		printk("\nradix_insert(): Parent[0x%x] Key[0x%x 0x%x:%s] Pos:%d Type:%d", (int)rnode,
 			*(int *)rnode->key, *(int *)(rnode->key + 4), rnode->key,
 			 rnode->pos, rnode->type);
+#else
+		printf("\nradix_insert(): Parent[0x%x] Key[0x%x 0x%x:%s] Pos:%d Type:%d", (int)rnode,
+			*(int *)rnode->key, *(int *)(rnode->key + 4), rnode->key,
+			 rnode->pos, rnode->type);
+#endif
+#endif
         return EOK;
     }
 
     // don't know the parent
     leaf->parent = NULL;
+#ifdef DEBUG_FLAG
+#ifndef USER_MODULE
+	printk("\nradix_insert(): Inserting Leaf Key[0x%x 0x%x:%s] Pos:%d Type:%d",
+			*(int *)leaf->key, *(int *)(leaf->key + 4), leaf->key, leaf->pos,
+			leaf->type);
+	printk("\nradix_insert(): Root Node[0x%x] Key[0x%x 0x%x:%s] Pos:%d Type:%d", (int)rnode,
+			*(int *)rnode->key, *(int *)(rnode->key + 4), rnode->key, rnode->pos,
+			rnode->type);
+#else
 	printf("\nradix_insert(): Inserting Leaf Key[0x%x 0x%x:%s] Pos:%d Type:%d",
 			*(int *)leaf->key, *(int *)(leaf->key + 4), leaf->key, leaf->pos,
 			leaf->type);
-	printf("\nradix_insert(): Root Node Key[0x%x 0x%x:%s] Pos:%d Type:%d",
+	printf("\nradix_insert(): Root Node[0x%x] Key[0x%x 0x%x:%s] Pos:%d Type:%d", (int)rnode,
 			*(int *)rnode->key, *(int *)(rnode->key + 4), rnode->key, rnode->pos,
 			rnode->type);
+#endif
+#endif
     return radix_insert_common(leaf, rnode);
 }
 
@@ -354,17 +587,22 @@ static radix_node_t* radix_lookup(char *key, radix_node_t *root)
     return radix_lookup(key, root->left);
 }
 
-void *radix_retrieve(char *key, radix_node_t *root)
+void *proc_radix_retrieve(char *key, radix_node_t *root)
 {
 	radix_node_t *rnode = radix_lookup(key, root);
 
 	if (!rnode) {
+#ifndef USER_MODULE
+        printk("\nproc_radix_retrieve(): NULL NODE !!!!!!");
+#else
+        printf("\nproc_radix_retrieve(): NULL NODE !!!!!!");
+#endif
 		return NULL;
 	}
 	return rnode->val;
 }
 
-void radix_inorder_traversal(radix_node_t *root)
+void proc_radix_inorder_traversal(radix_node_t *root)
 {
     if (!root) {
 		return;
@@ -374,16 +612,26 @@ void radix_inorder_traversal(radix_node_t *root)
         if (root->type == NODE_TYPE_ROOT) {
 			root = root->val;
 		}
-        printf("\nradix_inorder_traversal():Key[%s] Value[%s] Type[%d]", root->key, (char*)root->val, root->type);
+#ifdef DEBUG_FLAG
+#ifndef USER_MODULE
+        printk("\nradix_inorder_traversal():Key[%s] Type[%d]", root->key, root->type);
+#else
+        printf("\nradix_inorder_traversal():Key[%s] Type[%d]", root->key, root->type);
+#endif
+#endif
         return;
     }
-    radix_inorder_traversal(root->left);
-    radix_inorder_traversal(root->right);
+    proc_radix_inorder_traversal(root->left);
+    proc_radix_inorder_traversal(root->right);
 }
 
-radix_node_t * radix_tree_init()
+radix_node_t * proc_radix_tree_init()
 {
+#ifndef USER_MODULE
+    radix_node_t *root = kmalloc(sizeof(radix_node_t), GFP_KERNEL);
+#else
     radix_node_t *root = malloc(sizeof(radix_node_t));
+#endif
 
     if (!root) 
         return NULL;
@@ -402,84 +650,19 @@ static void radix_free_node(radix_node_t *rnode)
 
     if (rnode->val) {
 		// free the data stored
+#ifndef USER_MODULE
+        kfree(rnode->val);
+#else
         free(rnode->val);
+#endif
 	}
     rnode->left =
     rnode->right =
     rnode->val = NULL;
 
+#ifndef USER_MODULE
+    kfree(rnode);
+#else
     free(rnode);
-}
-
-
-#if 0
-int main(int argc, char **argv)
-{
-    radix_node_t *root = radix_tree_init();
-	char *key1 = "Romane";
-	char *data1 = "enamoR";
-	char *key2 = "Romanus";
-	char *data2 = "sunamoR";
-	char *key3 = "Romanfu";
-	char *data3 = "ufnamoR";
-	char *key4 = "Roming";
-	char *data4 = "gnimoR";
-	char *key5 = "Romanea";
-	char *data5 = "aenamoR";
-	char *key6 = "Romings";
-	char *data6 = "sgnimoR";
-
-	if (radix_insert(key1, data1, root) == EFAIL) {
-		printf("\nInsert Failed:[%s]...", key1);
-	} else {
-		printf("\nInsert Success:0x%x 0x%x [%s]...", *(int *)key1, *(int *)(key1 + 4), key1);
-		printf("\n\n");
-	}
-
-	if (radix_insert(key2, data2, root) == EFAIL) {
-		printf("\nInsert Failed:[%s]...", key2);
-	} else {
-		printf("\nInsert Success:0x%x 0x%x [%s]...", *(int *)key2, *(int *)(key2 + 4), key2);
-		printf("\n\n");
-	}
-
-	if (radix_insert(key3, data3, root) == EFAIL) {
-		printf("\nInsert Failed:[%s]...", key3);
-	} else {
-		printf("\nInsert Success:0x%x 0x%x [%s]...", *(int *)key3, *(int *)(key3 + 4), key3);
-		printf("\n\n");
-	}
-
-	if (radix_insert(key4, data4, root) == EFAIL) {
-		printf("\nInsert Failed:[%s]...", key4);
-	} else {
-		printf("\nInsert Success:0x%x 0x%x [%s]...", *(int *)key4, *(int *)(key4 + 4), key4);
-		printf("\n\n");
-	}
-
-	if (radix_insert(key5, data5, root) == EFAIL) {
-		printf("\nInsert Failed:[%s]...", key5);
-	} else {
-		printf("\nInsert Success:0x%x 0x%x [%s]...", *(int *)key5, *(int *)(key5 + 4), key5);
-		printf("\n\n");
-	}
-
-	if (radix_insert(key6, data6, root) == EFAIL) {
-		printf("\nInsert Failed:[%s]...", key6);
-	} else {
-		printf("\nInsert Success:0x%x 0x%x [%s]...", *(int *)key6, *(int *)(key6 + 4), key6);
-		printf("\n\n");
-	}
-
-	printf("\n\nRetrieval for Key:%s is Value:%s", key3, radix_retrieve(key3, root));
-	printf("\n\nRetrieval for Key:%s is Value:%s", key5, radix_retrieve(key5, root));
-	printf("\n\nRetrieval for Key:%s is Value:%s", key1, radix_retrieve(key1, root));
-	printf("\n\nRetrieval for Key:%s is Value:%s", key2, radix_retrieve(key2, root));
-	printf("\n\nRetrieval for Key:%s is Value:%s", key4, radix_retrieve(key4, root));
-
-	printf("\n\nThe Patricia Tree....");
-	radix_inorder_traversal(root);
-
-	return 0;
-}
 #endif
+}

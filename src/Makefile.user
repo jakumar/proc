@@ -1,0 +1,70 @@
+#
+#compiler: gcc for C program
+#
+CC = gcc
+
+#
+# compiler flags
+#   -g adds debugging information to the executable file
+#   -Wall turns ON most of the compiler warnings
+#
+CFLAGS = -g -Wall
+
+
+#
+# define any directories containing header files other than /usr/include
+#
+INCLUDES = -I../include
+
+#
+# define the c source files
+#
+SRCS =  proc_radix_tree.c \
+	proc_linked_list.c \
+	proc_fs_io.c \
+	proc_ioctl.c \
+	proc_ioctl_buf.c \
+	test.c 
+
+#
+# define the c object files
+#   $(name:string1=string2)
+#       For each work in 'name' replace 'string1' with 'string2'
+# below we are replacing the suffic .c for all words in the macro SRCS
+# with the .o suffix
+#
+OBJS = $(SRCS:.c=.o)
+ 
+#
+# define the executable file
+#
+MAIN = jnpr_proc_lkm
+
+#
+# generic declarations
+#.PHONY: depend clean
+#
+
+.PHONY: depend clean
+
+all:	$(MAIN)
+	@echo Compilation Successful !!!!
+
+
+$(MAIN): $(OBJS)
+	$(CC) $(CFLAGS) $(INCLUDES) -o $(MAIN) $(OBJS) 
+
+#
+# suffic replacre rile for buidling .0's from .c's
+# see the gnu make manual section about automatic vairables
+#
+.c.o:
+	$(CC)  $(CFLAGS) $(INCLUDES) -c $<  -o $@
+
+clean:
+	$(RM) *.o *~ $(MAIN)
+
+depend: $(SRCS)
+	makedepend $(ICNLUDES) $^
+
+# 

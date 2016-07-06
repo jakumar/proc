@@ -1,4 +1,4 @@
-#ifdef KERNEL_MODULE
+#ifndef USER_MODULE
 
 #include <linux/init.h>
 #include <linux/module.h>
@@ -13,14 +13,17 @@
 #include <linux/types.h>
 #include <linux/kdev_t.h>
 #include <linux/seq_file.h>
-#include "lkm_proc_ioctl_kernel.h"
-#include "lkm_linked_list.h"
 
 #include "proc_common.h"
+#include "proc_ioctl.h"
 #include "proc_linked_list.h"
 #include "proc_radix_tree.h"
 
 /** For class registration to work, you need GPL license **/
+#define MODULE_VERS "1.0"
+
+MODULE_AUTHOR("Juniper Networks Inc.");
+MODULE_DESCRIPTION("Juniper Kernel Module for Telemetry Data");
 MODULE_LICENSE("GPL");
 
 static int dev_major_number = 0;
@@ -28,9 +31,47 @@ static char proc_dir[LKM_CMD_MSG_LEN];
 static char proc_file[LKM_CMD_MSG_LEN];
 static struct class *char_driver_class;
 
+static int
+procfs_test_show (struct seq_file *proc_fp, void *arg)
+{
+#if 0
+    int index, data_index;
+    lkm_list_data_t *inner_kv;
 
+    /* Add to radix tree on dequeue */
+    proc_add_node_to_radix_tree();
 
-extern const struct file_operations procfs_file_ops;
+    for (index = 0; index < 10; index++) {
+        if (ll_data[index]) {
+            for (data_index = 0;
+                 data_index < ll_data_size[index];
+                 data_index++) {
+                inner_kv =
+                    ll_data[index] + (data_index * sizeof(lkm_list_data_t));
+                seq_printf(proc_fp, "%-10s:%s\n",
+                           inner_kv->inner_key, inner_kv->inner_value);
+                printk("%s:%s\n", inner_kv->inner_key, inner_kv->inner_value);
+            }
+        }
+    }
+
+#endif
+    return 0;
+}
+
+static int
+procfs_open (struct inode *inode, struct file *file)
+{
+    return single_open(file, procfs_test_show, NULL);
+}
+
+static const struct
+file_operations procfs_file_ops = {
+    .open           = procfs_open,
+    .read           = seq_read,
+    .llseek         = seq_lseek,
+    .release        = single_release,
+};
 
 
 
@@ -51,7 +92,9 @@ proc_ioctl_fs_destroy(void)
 
     if ((dir_name = strsep(&tmp_dir_p, "/")) != NULL) {
         printk("Remove proc dir: %s\n", dir_name);
+#if 0
         remove_proc_subtree(dir_name, NULL);
+#endif
     }
 
     return;
@@ -130,7 +173,7 @@ proc_ioctl_cdev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         break;
 
     case LKM_PROC_INFO_ADD:
-        result = proc_enqueue(msg);
+        result = proc_enqueue(cmd_msg->msg);
         if (result == EFAIL) {
             printk("Unable to process proc info successfully\n");
             result = -1;
@@ -221,7 +264,7 @@ static void
 proc_ioctl_lkm_exit (void)
 {
     /* Free up the character device */
-	proc_ioctl_ch_driver_destroy(void);
+	proc_ioctl_ch_driver_destroy();
 
     /* Remove the proc entry */
 	proc_ioctl_fs_destroy();
@@ -254,4 +297,4 @@ module_init(proc_ioctl_lkm_init);
  */
 module_exit(proc_ioctl_lkm_exit);
 
-#endif // KERNEL_MODULE
+#endif // USER_MODULE

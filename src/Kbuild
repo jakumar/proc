@@ -1,0 +1,12 @@
+# final kernel object package
+obj-m += jnpr-lkm-proc.o
+
+# path for include files
+ccflags-y = -I$(src)/../include
+
+# all binaries in the package
+jnpr-lkm-proc-y +=  proc_ioctl.o \
+                    proc_radix_tree.o \
+                    proc_linked_list.o \
+                    proc_ioctl_buf.o
+
