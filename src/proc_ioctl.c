@@ -26,159 +26,200 @@ MODULE_AUTHOR("Juniper Networks Inc.");
 MODULE_DESCRIPTION("Juniper Kernel Module for Telemetry Data");
 MODULE_LICENSE("GPL");
 
+static char *jnpr_dir_name = "jnpr";
+static struct proc_dir_entry *jnpr_dir_entry;
 static int dev_major_number = 0;
-static char proc_dir[LKM_CMD_MSG_LEN];
-static char proc_file[LKM_CMD_MSG_LEN];
 static struct class *char_driver_class;
 
-static int
-procfs_test_show (struct seq_file *proc_fp, void *arg)
-{
-#if 0
-    int index, data_index;
-    lkm_list_data_t *inner_kv;
+radix_node_t *proc_dir_root = NULL;
 
-    /* Add to radix tree on dequeue */
-    proc_add_node_to_radix_tree();
-
-    for (index = 0; index < 10; index++) {
-        if (ll_data[index]) {
-            for (data_index = 0;
-                 data_index < ll_data_size[index];
-                 data_index++) {
-                inner_kv =
-                    ll_data[index] + (data_index * sizeof(lkm_list_data_t));
-                seq_printf(proc_fp, "%-10s:%s\n",
-                           inner_kv->inner_key, inner_kv->inner_value);
-                printk("%s:%s\n", inner_kv->inner_key, inner_kv->inner_value);
-            }
-        }
-    }
-
-#endif
-    return 0;
-}
-
-static int
-procfs_open (struct inode *inode, struct file *file)
-{
-    return single_open(file, procfs_test_show, NULL);
-}
-
-static const struct
-file_operations procfs_file_ops = {
-    .open           = procfs_open,
-    .read           = seq_read,
-    .llseek         = seq_lseek,
-    .release        = single_release,
-};
-
-
+extern const struct file_operations procfs_file_ops;
 
 static void
-proc_ioctl_fs_destroy(void)
+proc_ioctl_proc_fs_destroy (void)
 {
-    char *dir_name;
-    char tmp_dir[LKM_CMD_MSG_LEN], *tmp_dir_p;
-
-    /* Remove the proc filesystem entry created earlier */
-    if (strlen(proc_dir)) {
-        strlcpy(tmp_dir, proc_dir, LKM_CMD_MSG_LEN);
-        tmp_dir_p = tmp_dir;
-    } else {
-        printk("%s: PROC DIR is NULL\n", __func__);
-        return;
-    }
-
-    if ((dir_name = strsep(&tmp_dir_p, "/")) != NULL) {
-        printk("Remove proc dir: %s\n", dir_name);
-#if 0
-        remove_proc_subtree(dir_name, NULL);
-#endif
-    }
-
+    printk("Remove proc dir: %s\n", jnpr_dir_name);
+    remove_proc_subtree(jnpr_dir_name, NULL);
     return;
 }
 
 static int
-proc_ioctl_init (void)
+proc_ioctl_proc_fs_init (void)
 {
+    /* Create JNPR subtree under /proc */
+    jnpr_dir_entry = proc_mkdir(jnpr_dir_name, NULL);
+    if (!jnpr_dir_entry) {
+        printk("Unable to create JNPR parent directory in proc fs\n");
+        return EFAIL;
+    }
+
+    /* Create global radix root to keep proc directory entries */
+    proc_dir_root = proc_radix_tree_init();
+    if (!proc_dir_root) {
+        printk("Unable to init proc radix root\n");
+        proc_ioctl_proc_fs_destroy();
+        return EFAIL;
+    }
+
+    return EOK;
+}
+
+static int
+proc_ioctl_dir_create (void *msg)
+{
+    void *radix_data = NULL;
+    int file_index, dir_index, index;
     char *dir_name;
-    char tmp_dir[LKM_CMD_MSG_LEN], *tmp_dir_p;
-    struct proc_dir_entry *last_dir_name = NULL;
+    char tmp_dir[LKM_DIR_NAME_LEN], *tmp_dir_p;
+    char tmp_proc_dir[LKM_DIR_NAME_LEN];
+    proc_dir_file_t *proc_dir_file;
+    struct proc_dir_entry *last_dir_entry = jnpr_dir_entry;
 
-    if (strlen(proc_dir)) {
-        strlcpy(tmp_dir, proc_dir, LKM_CMD_MSG_LEN);
+    if (!last_dir_entry) {
+        printk("Parent JNPR directory not created\n");
+        return EFAIL;
+    }
+
+    if (!msg) {
+        printk("Input msg is NULL\n");
+        return EFAIL;
+    }
+
+    /* Get the directory and file structure */
+    proc_dir_file = (proc_dir_file_t *)msg;
+
+    printk("proc_dir: %s\nnum_dir: %d\n", tmp_proc_dir, proc_dir_file->num_dir);
+
+    /* Start from first file */
+    file_index = 0;
+
+    /*
+    * Go thru all the directories and create them one after the other.
+    * Create the files in the directory before proceeding to create the next
+    * directories and files.
+    */
+    for (dir_index = 0; dir_index < proc_dir_file->num_dir; dir_index++) {
+        /* Set the well-known file prefix */
+        snprintf(tmp_proc_dir, LKM_DIR_NAME_LEN, "/proc/%s", jnpr_dir_name);
+
+        printk("Dir[%d]: %s\n", dir_index,
+                (char *)(proc_dir_file->dir_names + dir_index));
+        
+        /* This is the top level JNPR directory created under /proc */
+        last_dir_entry = jnpr_dir_entry;
+
+        /* Get the directory name */
+        memcpy(tmp_dir, proc_dir_file->dir_names + dir_index, LKM_DIR_NAME_LEN);
         tmp_dir_p = tmp_dir;
-    } else {
-        printk("%s: PROC DIR is NULL\n", __func__);
-        return -1;
+
+        /* 
+         * Parse the complete directory name with '/' as the seperator between
+         * individual directories
+         */
+        while ((dir_name = strsep(&tmp_dir_p, "/")) != NULL) {
+            /* Append this directory name to the top level directory */
+            snprintf(tmp_proc_dir + strlen(tmp_proc_dir),
+                     LKM_DIR_NAME_LEN, "/%s", dir_name);
+
+            printk("Next dir: %s\n", tmp_proc_dir);
+
+            /* Check if this directory already exists */
+            radix_data = proc_radix_retrieve(tmp_proc_dir, proc_dir_root);
+            if (radix_data) {
+                printk("Proc dir %s already present\n", tmp_proc_dir);
+                /* 
+                 * If present in radix tree assume this directory is already
+                 * created and move on to the next one
+                 */
+                last_dir_entry = (struct proc_dir_entry *)(radix_data);
+                continue;
+            }
+
+            printk("Adding dir: %s\n", dir_name);
+
+            /* Add new directory under it's parent directory */
+            last_dir_entry = proc_mkdir(dir_name, last_dir_entry);
+            if (!last_dir_entry) {
+                printk("Failed to add proc dir %s\n", tmp_proc_dir);
+                return EFAIL;
+            } else {
+                /* Add the newly added directory pointer to the radix tree */
+                if (proc_radix_insert(tmp_proc_dir, last_dir_entry,
+                                      proc_dir_root) == EFAIL) {
+                    printk("Unable to store proc dir for %s in radix tree\n",
+                            tmp_proc_dir);
+                    return EFAIL;
+                }
+            }
+        }
+
+        printk("Files[%d]: ", proc_dir_file->num_files_per_dir[dir_index]);
+
+        /* Now create all the files under this directory */
+        for (index = 0;
+             index < proc_dir_file->num_files_per_dir[dir_index];
+             index++, file_index++) {
+            printk("%s ", (char *)(proc_dir_file->file_names + file_index));
+            procfs_create((char *)(proc_dir_file->file_names + file_index),
+                          last_dir_entry);
+        }
+        printk("\n");
     }
 
-    while ((dir_name = strsep(&tmp_dir_p, "/")) != NULL) {
-        printk("Next dir: %s\n", dir_name);
-        last_dir_name = proc_mkdir(dir_name, last_dir_name);
-    }
-
-    proc_create(proc_file, 0, last_dir_name, &procfs_file_ops);
-
-    return 0;
+    return EOK;
 }
 
 int
-proc_ioctl_cdev_open(struct inode *inode, struct file *filp)
+proc_ioctl_cdev_open (struct inode *inode, struct file *filp)
 {
-    int result = 0;
     printk("%s\n", __func__);
-    return result;
+    return EOK;
 }
 
 int
-proc_ioctl_cdev_close(struct inode *inode, struct file *filp)
+proc_ioctl_cdev_close (struct inode *inode, struct file *filp)
 {
     printk("%s\n", __func__);
-    return 0;
+    return EOK;
 }
 
 static long
-proc_ioctl_cdev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+proc_ioctl_cdev_ioctl (struct file *filp, unsigned int cmd, unsigned long arg)
 {
-    int result = 0;
+    int result = EOK;
     lkm_cmd_msg_t *cmd_msg;
 
     printk("Ioctl is called\r\n");
 
     if (!arg) {
         printk("Input args NULL\n");
-        result = -1;
+        result = EFAIL;
         goto out;
     }
     cmd_msg = (lkm_cmd_msg_t *)arg;
 
+    printk("cmd: %d\n", cmd);
     switch (cmd) {
     case LKM_PROC_DIR_CMD:
-        /* Set the global proc directory structure */
-        strlcpy(proc_dir, cmd_msg->msg, LKM_CMD_MSG_LEN - 1);
-        strlcpy(proc_file, cmd_msg->msg_2, LKM_CMD_MSG_LEN - 1);
-
-        printk("Received proc dir %s, file %s\n", proc_dir, proc_file);
-
         /* Initialize the proc filesystem */
-        result = proc_ioctl_init();
+        printk("at LKM_PROC_DIR_CMD\n");
+        result = proc_ioctl_dir_create(cmd_msg->msg);
         if (result < 0) {
-            printk("Error in initializing proc filesystem");
-            result = -1;
+            printk("Error in initializing proc filesystem\n");
+            result = EFAIL;
             goto out;
         }
         break;
 
     case LKM_PROC_INFO_ADD:
+        printk("at LKM_PROC_INFO_ADD\n");
         result = proc_enqueue(cmd_msg->msg);
         if (result == EFAIL) {
             printk("Unable to process proc info successfully\n");
-            result = -1;
+            result = EFAIL;
             goto out;
         }
+        timer_callback(1);
         break;
 
     default:
@@ -198,22 +239,23 @@ file_operations cdev_file_ops = {
 };
 
 static int
-proc_ioctl_ch_driver_create(void)
+proc_ioctl_ch_driver_create (void)
 {
     /* Register and get a new device number from the kernel */
     dev_major_number = register_chrdev(0, LKMDRVNAME, &cdev_file_ops);
     if (dev_major_number < 0) {
         printk("Error in allocating device number");
-        return -1;
+        return EFAIL;
     }
 
     /* Create a class for this device */
     if ((char_driver_class = class_create(THIS_MODULE, "chardrv")) == NULL) {
-        // Return the device number to the kernel
+        /* Return the device number to the kernel */
         unregister_chrdev(dev_major_number, LKMDRVNAME);
-        return -1;
+        return EFAIL;
     }
 
+    /* Create the character device */
    if (device_create(char_driver_class, NULL, MKDEV(dev_major_number, 0),
                      NULL, LKMDRVNAME) == NULL) {
         printk("Error in creating device");
@@ -221,14 +263,14 @@ proc_ioctl_ch_driver_create(void)
         class_destroy(char_driver_class);
         /* Return the device number to the kernel */
 	unregister_chrdev(dev_major_number, LKMDRVNAME);
-        return -1;
+        return EFAIL;
     }
 
-    return 0;
+    return EOK;
 }
 
 static void
-proc_ioctl_ch_driver_destroy(void)
+proc_ioctl_ch_driver_destroy (void)
 {
     /* Destroy the character device */
     device_destroy(char_driver_class, MKDEV(dev_major_number, 0));
@@ -244,7 +286,7 @@ proc_ioctl_ch_driver_destroy(void)
 }
 
 static int
-proc_ioctl_lkm_init(void)
+proc_ioctl_lkm_init (void)
 {
     int result;
 
@@ -254,8 +296,12 @@ proc_ioctl_lkm_init(void)
         return result;
     }
 
-    strlcpy(proc_dir, "\0", LKM_CMD_MSG_LEN);
-    strlcpy(proc_file, "\0", LKM_CMD_MSG_LEN);
+    /* Init proc related details */
+    result = proc_ioctl_proc_fs_init();
+    if (result < 0) {
+        proc_ioctl_ch_driver_destroy(); 
+        return result;
+    }
 
     return result;
 }
@@ -264,10 +310,10 @@ static void
 proc_ioctl_lkm_exit (void)
 {
     /* Free up the character device */
-	proc_ioctl_ch_driver_destroy();
+    proc_ioctl_ch_driver_destroy();
 
     /* Remove the proc entry */
-	proc_ioctl_fs_destroy();
+    proc_ioctl_proc_fs_destroy();
 }
 
 /**
