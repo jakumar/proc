@@ -1,9 +1,18 @@
 #ifndef USER_MODULE
 
-#include <linux/module.h>	
-#include <linux/kernel.h>	
-#include <linux/proc_fs.h>	
+#include <linux/init.h>
+#include <linux/module.h>
+#include <linux/kernel.h>
+#include <linux/fs.h>
+#include <linux/cdev.h>
+#include <linux/device.h>
 #include <asm/uaccess.h>
+#include <linux/slab.h>
+#include <linux/proc_fs.h>
+#include <linux/utsname.h>
+#include <linux/types.h>
+#include <linux/kdev_t.h>
+#include <linux/seq_file.h>
 
 #else
 

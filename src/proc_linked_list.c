@@ -1,9 +1,18 @@
 #ifndef USER_MODULE
 
-#include <linux/module.h>	
-#include <linux/kernel.h>	
-#include <linux/proc_fs.h>	
+#include <linux/init.h>
+#include <linux/module.h>
+#include <linux/kernel.h>
+#include <linux/fs.h>
+#include <linux/cdev.h>
+#include <linux/device.h>
 #include <asm/uaccess.h>
+#include <linux/slab.h>
+#include <linux/proc_fs.h>
+#include <linux/utsname.h>
+#include <linux/types.h>
+#include <linux/kdev_t.h>
+#include <linux/seq_file.h>
 
 #else
 
@@ -17,26 +26,32 @@
 #include "proc_common.h"
 #include "proc_linked_list.h"
 #include "proc_ioctl_buf.h"
+#include "proc_ioctl.h"
 
-linked_list_t *head=NULL;
-linked_list_t *tail=NULL;
+linked_list_t *head = NULL;
+linked_list_t *tail = NULL;
 
-#define SLICE_SIZE 10
-
-
-unsigned int proc_enqueue(void *data)
+unsigned int
+proc_enqueue (void *data)
 {
 #ifndef USER_MODULE
     linked_list_t *node = kmalloc(sizeof(linked_list_t), GFP_KERNEL);
+    void *node_data = kmalloc(sizeof(proc_data_t), GFP_KERNEL);
 #else
     linked_list_t *node = malloc(sizeof(linked_list_t), GFP_KERNEL);
+    void *node_data = malloc(sizeof(proc_data_t), GFP_KERNEL);
 #endif
 	
-    if (!node) {
+    if ((!data) || (!node) || (!node_data)) {
         return EFAIL;
     }
 
-    node->data = data;
+#ifndef USER_MODULE
+    copy_from_user(node_data, data, sizeof(proc_data_t));
+#else
+    memcpy(node_data, data, sizeof(proc_data_t));
+#endif
+    node->data = node_data;
     node->next = node->prev = NULL;
 
     if (!tail) {
@@ -49,8 +64,8 @@ unsigned int proc_enqueue(void *data)
     return EOK;
 }
 
-
-linked_list_t *proc_dequeue(void)
+linked_list_t *
+proc_dequeue (void)
 {
     linked_list_t *node = NULL;
 
@@ -67,24 +82,28 @@ linked_list_t *proc_dequeue(void)
     return node;
 }
 
-void timer_callback(unsigned long dummy)
+void
+timer_callback (unsigned long dummy)
 {
-	linked_list_t *node;	
-	unsigned int slice = 0;
+    linked_list_t *node;	
+    unsigned int slice = 0;
 
-	while (1) {
-		if (slice++ >= SLICE_SIZE) 
-			break;
-		if (!(node = proc_dequeue())) 
-			break;
+    while (1) {
+        if ((slice++ >= SLICE_SIZE) || (!(node = proc_dequeue()))) {
+            break;
+        }
 
-        proc_ioctl_buf_handler(node->data); 
+        if (proc_process_and_add_node_to_radix_tree(node->data) != EOK) {
+            printk("Process node failed %p\n", node);
+        }
 #ifndef USER_MODULE
-		kfree(node);
+        kfree(node->data);
+        kfree(node);
 #else
-		free(node);
+        free(node->data);
+        free(node);
 #endif
-	}
+    }
 }
 
 //******* Kernel module for timer *************
