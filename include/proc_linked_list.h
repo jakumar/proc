@@ -7,7 +7,8 @@ typedef struct linked_list_ {
     struct linked_list_ *prev;
 } linked_list_t;
 
+linked_list_t * proc_dequeue (void);
 unsigned int proc_enqueue(void *data);
-void timer_callback(unsigned long dummy);
+void proc_timer_callback(unsigned long dummy);
 
 #endif // PROC_LINKED_LIST

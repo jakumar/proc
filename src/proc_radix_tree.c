@@ -596,9 +596,10 @@ static radix_node_t* radix_lookup(char *key, radix_node_t *root)
     return radix_lookup(key, root->left);
 }
 
-void *proc_radix_retrieve(char *key, radix_node_t *root)
+void *proc_radix_retrieve(char *key, void *leaf, radix_node_t *root)
 {
 	radix_node_t *rnode = radix_lookup(key, root);
+    void *pval;
 
 	if (!rnode) {
 #ifndef USER_MODULE
@@ -608,7 +609,11 @@ void *proc_radix_retrieve(char *key, radix_node_t *root)
 #endif
 		return NULL;
 	}
-	return rnode->val;
+    
+    pval = rnode->val;
+    if (leaf)
+        rnode->val = leaf;
+	return pval;
 }
 
 void proc_radix_inorder_traversal(radix_node_t *root)

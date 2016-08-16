@@ -18,7 +18,7 @@ typedef struct radix_node_ {
     struct radix_node_ *right;
 } radix_node_t;
 
-void *proc_radix_retrieve(char *key, radix_node_t *root);
+void *proc_radix_retrieve(char *key, void *leaf, radix_node_t *root);
 unsigned int proc_radix_insert(char *key, void *data, radix_node_t *rnode);
 void proc_radix_inorder_traversal(radix_node_t *root);
 radix_node_t * proc_radix_tree_init(void);
